@@ -13,19 +13,24 @@ extern "C" {
     fn sleep(n: i32) -> i32;
 }
 
-const BEAR_LINE1: &[u8] = b"   _     _   \n\0";
-const BEAR_LINE2: &[u8] = b"  (c).-.(c)  \n\0";
-const BEAR_LINE3: &[u8] = b"   / ._. \\   \n\0";
-const BEAR_LINE4: &[u8] = b" __\\( Y )/__ \n\0";
-const BEAR_LINE5: &[u8] = b"(_.-/'-'\\-._)\n\0";
-const BEAR_LINE6_PRE: &[u8] = b"   || \0";
-const BEAR_LINE6_POST: &[u8] = b" ||   \n\0";
-const BEAR_LINE7: &[u8] = b" _.' `-' '._ \n\0";
-const BEAR_LINE8: &[u8] = b"(.-./`-'\\.-.) \n\0";
-const BEAR_LINE9: &[u8] = b" `-'     `-' \n\0";
-
 const NUM_BEARS: i32 = 6;
 const LETTERS: &[u8] = b"GOOOAL";
+const SLEEP_TIME: i32 = 10;
+
+// Bear ASCII art as separate lines
+const BEAR_LINES: [&[u8]; 9] = [
+    b"   _     _   ",
+    b"  (c).-.(c)  ",
+    b"   / ._. \\   ",
+    b" __\\( Y )/__ ",
+    b"(_.-/'-'\\-._)",
+    b"   ||   ||   ",
+    b" _.' `-' '._ ",
+    b"(.-./`-'\\.-.)",
+    b" `-'     `-' ",
+];
+
+const BEAR_WIDTH: usize = 16; // Width of each bear including spacing
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
@@ -33,45 +38,71 @@ fn panic(_info: &PanicInfo) -> ! {
 }
 
 unsafe fn write_str(s: &[u8]) {
-    write(1, s.as_ptr(), (s.len() - 1) as i32);
+    write(1, s.as_ptr(), s.len() as i32);
 }
 
-unsafe fn print_bear(num: i32, letter: u8) {
-    // Print newlines for spacing
-    for _ in 0..10 {
-        write_str(b"\n\0");
+// Simplified number writing function that avoids array bounds checks
+unsafe fn write_num(mut n: usize) {
+    // Handle special case for 0
+    if n == 0 {
+        write(1, &b'0', 1);
+        return;
     }
 
-    // Print bear number
-    write_str(b"Bear \0");
-    let mut num_buf = [0u8; 16];
-    let mut i = 0;
-    let mut n = num;
-    loop {
-        num_buf[i] = (n % 10) as u8 + b'0';
-        n /= 10;
-        i += 1;
-        if n == 0 {
-            break;
+    // Convert number to string, one digit at a time
+    let mut divisor = 1;
+    let mut temp = n;
+
+    // Find the largest power of 10 less than n
+    while temp >= 10 {
+        divisor *= 10;
+        temp /= 10;
+    }
+
+    // Print each digit
+    while divisor > 0 {
+        let digit = (n / divisor) as u8 + b'0';
+        write(1, &digit, 1);
+        n %= divisor;
+        divisor /= 10;
+    }
+}
+
+unsafe fn print_bears(active_bear: usize) {
+    static mut FIRST_DRAW: bool = true;
+
+    if FIRST_DRAW {
+        // Clear screen and setup
+        write_str(b"\x1b[2J"); // Clear screen
+        write_str(b"\x1b[H"); // Move to home
+        write_str(b"Bear circle:\n");
+        write_str(b"-----------------\n\n");
+        FIRST_DRAW = false;
+    }
+
+    // Print each line of bears
+    for (line_idx, &line) in BEAR_LINES.iter().enumerate() {
+        for bear_idx in 0..NUM_BEARS as usize {
+            // Position cursor for this part of the bear
+            write_str(b"\x1b[");
+            write_num(line_idx + 3);
+            write_str(b";");
+            write_num(bear_idx * BEAR_WIDTH + 1);
+            write_str(b"H");
+
+            // Print the bear line
+            write_str(line);
+
+            // Add marker if this is the active bear
+            if bear_idx == active_bear && line_idx == 5 {
+                write_str(b"[");
+                write(1, &LETTERS[bear_idx], 1);
+                write_str(b"]");
+            } else if line_idx == 5 {
+                write_str(b"   ");
+            }
         }
     }
-    while i > 0 {
-        i -= 1;
-        write(1, &num_buf[i] as *const u8, 1);
-    }
-    write_str(b":\n\0");
-
-    write_str(BEAR_LINE1);
-    write_str(BEAR_LINE2);
-    write_str(BEAR_LINE3);
-    write_str(BEAR_LINE4);
-    write_str(BEAR_LINE5);
-    write_str(BEAR_LINE6_PRE);
-    write(1, &letter as *const u8, 1);
-    write_str(BEAR_LINE6_POST);
-    write_str(BEAR_LINE7);
-    write_str(BEAR_LINE8);
-    write_str(BEAR_LINE9);
 }
 
 #[no_mangle]
@@ -82,7 +113,7 @@ pub extern "C" fn main() -> ! {
         // Create pipes for the circle
         for i in 0..NUM_BEARS as usize {
             if pipe(&mut pipes[i] as *mut [i32; 2]) < 0 {
-                write_str(b"Failed to create pipe\n\0");
+                write_str(b"Failed to create pipe\n");
                 exit(1);
             }
         }
@@ -91,7 +122,7 @@ pub extern "C" fn main() -> ! {
         for i in 0..NUM_BEARS {
             let pid = fork();
             if pid < 0 {
-                write_str(b"Fork failed\n\0");
+                write_str(b"Fork failed\n");
                 exit(1);
             }
             if pid == 0 {
@@ -99,15 +130,11 @@ pub extern "C" fn main() -> ! {
                 let bear_idx = i as usize;
                 let next_idx = ((i + 1) % NUM_BEARS) as usize;
 
-                // Close all write ends except next bear's pipe
+                // Close unused pipe ends
                 for j in 0..NUM_BEARS as usize {
                     if j != next_idx {
                         close(pipes[j][1]);
                     }
-                }
-
-                // Close all read ends except current bear's pipe
-                for j in 0..NUM_BEARS as usize {
                     if j != bear_idx {
                         close(pipes[j][0]);
                     }
@@ -115,25 +142,15 @@ pub extern "C" fn main() -> ! {
 
                 let mut token = [0u8; 1];
                 loop {
-                    // Wait for token
                     read(pipes[bear_idx][0], token.as_mut_ptr(), 1);
-
-                    // Print bear
-                    if let Some(&letter) = LETTERS.get(bear_idx) {
-                        print_bear(i + 1, letter);
-                    }
-
-                    // Wait a bit
-                    sleep(1);
-
-                    // Pass token to next bear
+                    print_bears(bear_idx);
+                    sleep(SLEEP_TIME);
                     write(pipes[next_idx][1], token.as_ptr(), 1);
                 }
             }
         }
 
         // Parent process
-        // Close all pipes except the first one's write end
         for i in 0..NUM_BEARS as usize {
             if i != 0 {
                 close(pipes[i][1]);
@@ -141,11 +158,9 @@ pub extern "C" fn main() -> ! {
             close(pipes[i][0]);
         }
 
-        // Start the khorovod by sending the first token
         let token = [1u8; 1];
         write(pipes[0][1], token.as_ptr(), 1);
 
-        // Keep the parent process alive
         loop {
             sleep(1000);
         }
