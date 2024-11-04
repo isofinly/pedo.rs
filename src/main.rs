@@ -15,9 +15,11 @@ extern "C" {
 
 const NUM_BEARS: i32 = 6;
 const LETTERS: &[u8] = b"GOOOAL";
-const SLEEP_TIME: i32 = 10;
+const SLEEP_TIME: i32 = 5;
 
-// Bear ASCII art as separate lines
+const DANCE_POSITIONS: [i32; 2] = [-2, 2]; // Up and down positions
+const ANIMATION_FRAMES: usize = 2;
+
 const BEAR_LINES: [&[u8]; 9] = [
     b"   _     _   ",
     b"  (c).-.(c)  ",
@@ -41,9 +43,7 @@ unsafe fn write_str(s: &[u8]) {
     write(1, s.as_ptr(), s.len() as i32);
 }
 
-// Simplified number writing function that avoids array bounds checks
 unsafe fn write_num(mut n: usize) {
-    // Handle special case for 0
     if n == 0 {
         write(1, &b'0', 1);
         return;
@@ -68,24 +68,45 @@ unsafe fn write_num(mut n: usize) {
     }
 }
 
-unsafe fn print_bears(active_bear: usize) {
+unsafe fn print_bears(active_bear: usize, frame: usize) {
     static mut FIRST_DRAW: bool = true;
+    static mut COLLECTED_LETTERS: usize = 0;
+
+    write_str(b"\x1b[2J"); // Clear screen
+    write_str(b"\x1b[H"); // Move to home
+    write_str(b"Bear circle:\n");
+    write_str(b"-----------------\n\n");
 
     if FIRST_DRAW {
-        // Clear screen and setup
-        write_str(b"\x1b[2J"); // Clear screen
-        write_str(b"\x1b[H"); // Move to home
-        write_str(b"Bear circle:\n");
-        write_str(b"-----------------\n\n");
+        COLLECTED_LETTERS = 0;
         FIRST_DRAW = false;
     }
+
+    // Update collected letters when a new bear becomes active
+    if active_bear >= COLLECTED_LETTERS {
+        COLLECTED_LETTERS = active_bear + 1;
+    }
+
+    // Add extra vertical space for dancing
+    let base_line = 5; // Increased base line to give room for upward movement
 
     // Print each line of bears
     for (line_idx, &line) in BEAR_LINES.iter().enumerate() {
         for bear_idx in 0..NUM_BEARS as usize {
-            // Position cursor for this part of the bear
+            // Calculate vertical offset for dancing
+            let dance_offset = if bear_idx < COLLECTED_LETTERS {
+                if bear_idx % 2 == frame % 2 {
+                    DANCE_POSITIONS[0]
+                } else {
+                    DANCE_POSITIONS[1]
+                }
+            } else {
+                0
+            };
+
+            // Position cursor for this part of the bear with dance offset
             write_str(b"\x1b[");
-            write_num(line_idx + 3);
+            write_num((line_idx as i32 + base_line + dance_offset) as usize);
             write_str(b";");
             write_num(bear_idx * BEAR_WIDTH + 1);
             write_str(b"H");
@@ -93,13 +114,19 @@ unsafe fn print_bears(active_bear: usize) {
             // Print the bear line
             write_str(line);
 
-            // Add marker if this is the active bear
-            if bear_idx == active_bear && line_idx == 5 {
-                write_str(b"[");
-                write(1, &LETTERS[bear_idx], 1);
-                write_str(b"]");
-            } else if line_idx == 5 {
-                write_str(b"   ");
+            // Add marker and letter if this bear has been activated
+            if line_idx == 5 {
+                if bear_idx < COLLECTED_LETTERS {
+                    write_str(b"[");
+                    write(1, &LETTERS[bear_idx], 1);
+                    write_str(b"]");
+                } else if bear_idx == active_bear {
+                    write_str(b"[");
+                    write(1, &LETTERS[bear_idx], 1);
+                    write_str(b"]");
+                } else {
+                    write_str(b"   ");
+                }
             }
         }
     }
@@ -110,7 +137,6 @@ pub extern "C" fn main() -> ! {
     let mut pipes = [[0i32; 2]; NUM_BEARS as usize];
 
     unsafe {
-        // Create pipes for the circle
         for i in 0..NUM_BEARS as usize {
             if pipe(&mut pipes[i] as *mut [i32; 2]) < 0 {
                 write_str(b"Failed to create pipe\n");
@@ -141,9 +167,11 @@ pub extern "C" fn main() -> ! {
                 }
 
                 let mut token = [0u8; 1];
+                let mut frame = 0;
                 loop {
                     read(pipes[bear_idx][0], token.as_mut_ptr(), 1);
-                    print_bears(bear_idx);
+                    print_bears(bear_idx, frame % ANIMATION_FRAMES);
+                    frame += 1;
                     sleep(SLEEP_TIME);
                     write(pipes[next_idx][1], token.as_ptr(), 1);
                 }
